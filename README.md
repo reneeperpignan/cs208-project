@@ -131,6 +131,79 @@ The frontend will start on http://localhost:3000
 
 ---
 
+## Collaborative Workflow: Branching, Pull Requests, and Merging
+
+### Creating a New Branch and Pushing Changes
+
+For each new feature or fix, follow these steps:
+
+```bash
+# 1. Make sure you are on main and pull the latest changes
+git checkout main
+git pull origin main
+
+# 2. Create and switch to a new branch (replace feature/my-feature with a descriptive name)
+git checkout -b feature/my-feature
+
+# 3. Make your changes (edit files, add new files, etc.)
+
+# 4. Stage all your changes for commit
+git add .
+
+# 5. Commit your changes with a helpful message
+git commit -m "Describe what you changed"
+
+# 6. Push your new branch to GitHub
+git push -u origin feature/my-feature
+```
+
+After pushing, go to GitHub and open a Pull Request to merge your branch into main.
+
+### Once changes have been merged by repo owner, do this:
+
+git checkout main
+git pull
+git branch -d feature/my-feature
+
+(Switches to main branch, pulls the merge, then deletes old branch)
+---
+
+### Merging a Completed Branch into main (as the repo owner/maintainer)
+
+Once a Pull Request is reviewed and approved (or if merging locally):
+
+```bash
+# 1. Make sure your local main is up to date
+git checkout main
+git pull origin main
+
+# 2. Merge the feature branch (replace feature/my-feature)
+git merge feature/my-feature
+
+# 3. Push the updated main branch to GitHub
+git push origin main
+```
+
+---
+
+### Deleting a Branch After Merge
+
+Once the changes are merged and no longer needed:
+
+```bash
+# Delete the branch locally
+git branch -d feature/my-feature
+
+# Delete the branch from GitHub
+git push origin --delete feature/my-feature
+```
+
+---
+
+**Tip:** Always use descriptive branch names and commit messages. Keep your main branch clean—never commit directly to main.
+
+---
+
 ## Development
 
 The application uses:
