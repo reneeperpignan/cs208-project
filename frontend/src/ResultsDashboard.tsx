@@ -1,6 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Box, Typography, Slider, Button, Paper, Grid, CircularProgress, Table, TableHead, TableRow, TableCell, TableBody } from '@mui/material';
 import { Line, Bar } from 'react-chartjs-2';
+import type { ChartData } from 'chart.js';
+import 'chartjs-chart-error-bars';
+import { BarWithErrorBarsController, BarWithErrorBar } from 'chartjs-chart-error-bars';
 import axios from 'axios';
 import {
   Chart as ChartJS,
@@ -8,7 +11,7 @@ import {
   LinearScale,
   PointElement,
   LineElement,
-  BarElement,      // <-- Add this
+  BarElement,
   Title,
   Tooltip,
   Legend
@@ -19,14 +22,17 @@ ChartJS.register(
   LinearScale,
   PointElement,
   LineElement,
-  BarElement,      // <-- And register it here
+  BarElement,
   Title,
   Tooltip,
-  Legend
+  Legend,
+  BarWithErrorBarsController,
+  BarWithErrorBar
 );
 
 interface ResultsDashboardProps {
   data: number[];
+  column?: string;
   defaultEpsilons?: number[];
 }
 
@@ -41,11 +47,14 @@ interface DPResult {
   };
 }
 
-const ResultsDashboard: React.FC<ResultsDashboardProps> = ({ data, defaultEpsilons = [0.1, 0.5, 1.0, 2.0, 5.0] }) => {
+const ResultsDashboard: React.FC<ResultsDashboardProps> = ({ data, column = '', defaultEpsilons = [0.1, 0.5, 1.0, 2.0, 5.0] }) => {
   const [epsilons, setEpsilons] = useState<number[]>(defaultEpsilons);
   const [results, setResults] = useState<DPResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [customEpsilon, setCustomEpsilon] = useState<number>(1.0);
+  const [errorBarData, setErrorBarData] = useState<any>(null);
+  const errorBarInterval = useRef<NodeJS.Timeout | null>(null);
+  
 
   const handleAddEpsilon = () => {
     if (!epsilons.includes(customEpsilon)) {
@@ -58,22 +67,34 @@ const ResultsDashboard: React.FC<ResultsDashboardProps> = ({ data, defaultEpsilo
   };
 
   const fetchResults = async () => {
-    console.log("Fetching results", data, epsilons)
     setLoading(true);
     try {
-      const response = await axios.post('http://localhost:5050/api/compute-multi-epsilon', {
-        values: data,
-        epsilons,
+      const promises = epsilons.map(async (epsilon) => {
+        const response = await axios.post('http://localhost:5050/api/compute-stats', {
+          data: data.map(v => ({ [column]: v })),
+          epsilon,
+          group_by: null,
+          statistic: 'mean', 
+          column: column
+        });
+        return {
+          epsilon,
+          mean: response.data.groups[0]?.dp ?? null,
+          count: response.data.groups[0]?.dp ?? null, 
+          histogram: {},
+          model_performance: undefined
+        };
       });
-      console.log("Results from backend", response.data.results)
-      setResults(response.data.results);
+      const allResults = await Promise.all(promises);
+      setResults(allResults);
     } catch (error) {
       console.error('Error fetching DP results:', error);
     }
     setLoading(false);
   };
 
-  // Prepare data for charts
+  
+
   const chartData = {
     labels: results.map((r) => r.epsilon),
     datasets: [
@@ -81,13 +102,13 @@ const ResultsDashboard: React.FC<ResultsDashboardProps> = ({ data, defaultEpsilo
         label: 'DP Mean',
         data: results.map((r) => r.mean),
         borderColor: 'blue',
-        fill: false,
+        
       },
       {
         label: 'DP Count',
         data: results.map((r) => r.count),
         borderColor: 'green',
-        fill: false,
+        
       },
     ],
   };
@@ -99,10 +120,12 @@ const ResultsDashboard: React.FC<ResultsDashboardProps> = ({ data, defaultEpsilo
         label: 'Model Accuracy',
         data: results.map((r) => r.model_performance?.accuracy ?? null),
         borderColor: 'purple',
-        fill: false,
+        
       },
     ],
   };
+
+  
 
   return (
     <Paper sx={{ p: 3, mt: 4 }} elevation={3}>
@@ -187,38 +210,88 @@ const ResultsDashboard: React.FC<ResultsDashboardProps> = ({ data, defaultEpsilo
         <Box sx={{ mt: 4 }}>
           <Typography variant="h6">Histograms</Typography>
           <Grid container spacing={2}>
-            {results.map((r) => {
-              const bins = Object.keys(r.histogram);
-              const counts = Object.values(r.histogram);
-              const barData = {
-                labels: bins,
-                datasets: [
-                  {
-                    label: `DP Histogram (Epsilon: ${r.epsilon})`,
-                    data: counts,
-                    backgroundColor: 'rgba(75,192,192,0.6)',
-                  },
-                ],
-              };
-              return (
-                <Grid item xs={12} md={4} key={`hist-${r.epsilon}`}>
-                  <Typography variant="subtitle1">Epsilon: {r.epsilon}</Typography>
-                  <Bar data={barData} options={{
+            {results.map((r) => (
+              <Grid item xs={12} md={4} key={`hist-${r.epsilon}`}>
+                <Typography variant="subtitle1">Epsilon: {r.epsilon}</Typography>
+                <Bar 
+                  data={{
+                    labels: Object.keys(r.histogram),
+                    datasets: [
+                      {
+                        label: `DP Histogram (Epsilon: ${r.epsilon})`,
+                        data: Object.values(r.histogram),
+                        backgroundColor: 'rgba(75,192,192,0.6)',
+                      },
+                    ],
+                  }}
+                  options={{
                     responsive: true,
                     plugins: { legend: { display: false } },
                     scales: {
                       x: { title: { display: true, text: 'Bin' } },
                       y: { title: { display: true, text: 'Count' }, beginAtZero: true }
                     }
-                  }} />
-                </Grid>
-              );
-            })}
+                  }}
+                />
+              </Grid>
+            ))}
           </Grid>
+          
         </Box>
       )}
+
+      <Box sx={{ mt: 6 }}>
+        <Typography variant="h6">Animated Error Bar Plot (DP Variability for Epsilon {epsilons[0]})</Typography>
+        {errorBarData ? (() => {
+          const errorBarGroups = Object.keys(errorBarData);
+          if (errorBarGroups.length === 0) {
+            return <Typography color="textSecondary">No error bar data available yet.</Typography>;
+          }
+          const means = errorBarGroups.map(g => errorBarData[g].mean);
+          const stds = errorBarGroups.map(g => errorBarData[g].std);
+          const errorBarChartData = {
+            labels: errorBarGroups,
+            datasets: [
+              {
+                label: 'DP Mean',
+                data: means,
+                backgroundColor: 'rgba(255,99,132,0.5)',
+                borderColor: 'rgba(255,99,132,1)',
+                borderWidth: 1,
+              }
+            ],
+          };
+          return (
+            <Bar data={errorBarChartData} options={{
+              responsive: true,
+              plugins: {
+                legend: { display: true },
+                tooltip: {
+                  callbacks: {
+                    label: function(context: any) {
+                      const idx = context.dataIndex;
+                      const mean = means[idx];
+                      const std = stds[idx];
+                      const lower = mean - 1.96 * std;
+                      const upper = mean + 1.96 * std;
+                      return `DP Mean: ${mean.toFixed(3)} (95% CI: [${lower.toFixed(3)}, ${upper.toFixed(3)}])`;
+                    }
+                  }
+                }
+              },
+              scales: {
+                x: { title: { display: true, text: 'Group' } },
+                y: { title: { display: true, text: 'DP Statistic' }, beginAtZero: true }
+              }
+            }} />
+          );
+        })() : (
+          <Typography color="textSecondary">No error bar data available yet.</Typography>
+        )}
+      </Box>
+
     </Paper>
   );
-};
+}
 
 export default ResultsDashboard;
